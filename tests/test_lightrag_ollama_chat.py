@@ -38,9 +38,9 @@ class McpError(Exception):
 
 DEFAULT_CONFIG = {
     "server": {
-        "host": "localhost",
-        "port": 9621,
-        "model": "lightrag:latest",
+        "host": "host.docker.internal",
+        "port": 11434,
+        "model": "llama3.2:latest",
         "timeout": 300,
         "max_retries": 1,
         "retry_delay": 1,
