@@ -67,3 +67,5 @@ test_*
 
 # Cline files
 memory-bank/
+Miniconda3-latest-Linux-x86_64.sh
+tests/test_lightrag_ollama_chat.py
