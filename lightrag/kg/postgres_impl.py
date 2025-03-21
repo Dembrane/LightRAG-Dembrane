@@ -428,8 +428,8 @@ class PGVectorStorage(BaseVectorStorage):
         except Exception as e:
             logger.error(f"Error to prepare upsert,\nsql: {e}\nitem: {item}")
             raise
-
-        return upsert_sql, data
+        doc_2_graph_map = None
+        return upsert_sql, data, doc_2_graph_map
 
     def _upsert_entities(self, item: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         upsert_sql = SQL_TEMPLATES["upsert_entity"]
@@ -449,7 +449,17 @@ class PGVectorStorage(BaseVectorStorage):
             "file_path": item["file_path"],
             # TODO: add document_id
         }
-        return upsert_sql, data
+        doc_2_graph_map = []
+        for chunk_id in chunk_ids:
+            doc_2_graph_map.append(
+                {
+                    "workspace": self.db.workspace,
+                    "chunk_id": chunk_id,
+                    "graph_id": item["__id__"],
+                }
+            )
+
+        return upsert_sql, data, doc_2_graph_map
 
     def _upsert_relationships(self, item: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         upsert_sql = SQL_TEMPLATES["upsert_relationship"]
@@ -470,7 +480,16 @@ class PGVectorStorage(BaseVectorStorage):
             "file_path": item["file_path"],
             # TODO: add document_id
         }
-        return upsert_sql, data
+        doc_2_graph_map = []
+        for chunk_id in chunk_ids:
+            doc_2_graph_map.append(
+                {
+                    "workspace": self.db.workspace,
+                    "chunk_id": chunk_id,
+                    "graph_id": item["__id__"],
+                }
+            )
+        return upsert_sql, data, doc_2_graph_map
 
     async def upsert(self, data: dict[str, dict[str, Any]]) -> None:
         logger.info(f"Inserting {len(data)} to {self.namespace}")
@@ -500,15 +519,21 @@ class PGVectorStorage(BaseVectorStorage):
             d["__vector__"] = embeddings[i]
         for item in list_data:
             if is_namespace(self.namespace, NameSpace.VECTOR_STORE_CHUNKS):
-                upsert_sql, data = self._upsert_chunks(item)
+                upsert_sql, data, doc_2_graph_map = self._upsert_chunks(item)
             elif is_namespace(self.namespace, NameSpace.VECTOR_STORE_ENTITIES):
-                upsert_sql, data = self._upsert_entities(item)
+                upsert_sql, data, doc_2_graph_map = self._upsert_entities(item)
             elif is_namespace(self.namespace, NameSpace.VECTOR_STORE_RELATIONSHIPS):
-                upsert_sql, data = self._upsert_relationships(item)
+                upsert_sql, data, doc_2_graph_map = self._upsert_relationships(item)
             else:
                 raise ValueError(f"{self.namespace} is not supported")
 
             await self.db.execute(upsert_sql, data)
+            if doc_2_graph_map:
+                for doc_2_graph in doc_2_graph_map:
+                    print("****type****", type(doc_2_graph))
+                    await self.db.execute(
+                        SQL_TEMPLATES["upsert_doc_2_graph_map"], doc_2_graph
+                    )
 
     #################### query method ###############
     async def query(
@@ -1639,6 +1664,14 @@ TABLES = {
 	               CONSTRAINT LIGHTRAG_DOC_STATUS_PK PRIMARY KEY (workspace, id)
 	              )"""
     },
+    "LIGHTRAG_CHUNK_GRAPH_MAP": {
+        "ddl": """CREATE TABLE LIGHTRAG_CHUNK_GRAPH_MAP (
+                workspace VARCHAR(255),
+                chunk_id VARCHAR(255),
+                graph_id VARCHAR(255),
+                CONSTRAINT LIGHTRAG_CHUNK_GRAPH_MAP_PK PRIMARY KEY (workspace, chunk_id, graph_id)
+            )"""
+    },
 }
 
 
@@ -1716,6 +1749,10 @@ SQL_TEMPLATES = {
                       file_path=EXCLUDED.file_path,
                       update_time = CURRENT_TIMESTAMP
                      """,
+    "upsert_doc_2_graph_map": """INSERT INTO LIGHTRAG_CHUNK_GRAPH_MAP (workspace, chunk_id, graph_id)
+                                VALUES ($1, $2, $3)
+                                ON CONFLICT ON CONSTRAINT LIGHTRAG_CHUNK_GRAPH_MAP_PK DO NOTHING
+                                """,
     # SQL for VectorStorage
     # "entities": """SELECT entity_name FROM
     #     (SELECT id, entity_name, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
