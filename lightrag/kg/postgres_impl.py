@@ -530,7 +530,6 @@ class PGVectorStorage(BaseVectorStorage):
             await self.db.execute(upsert_sql, data)
             if doc_2_graph_map:
                 for doc_2_graph in doc_2_graph_map:
-                    print("****type****", type(doc_2_graph))
                     await self.db.execute(
                         SQL_TEMPLATES["upsert_doc_2_graph_map"], doc_2_graph
                     )
