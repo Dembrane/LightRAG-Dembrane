@@ -548,7 +548,9 @@ class PGVectorStorage(BaseVectorStorage):
             formatted_ids = "NULL"
 
         sql = SQL_TEMPLATES[self.base_namespace].format(
-            embedding_string=embedding_string, doc_ids=formatted_ids
+            embedding_string=embedding_string,
+            doc_ids=formatted_ids,
+            filter="1" if ids else "NULL",
         )
         params = {
             "workspace": self.db.workspace,
@@ -1795,7 +1797,7 @@ SQL_TEMPLATES = {
     WITH relevant_chunks AS (
         SELECT id as chunk_id
         FROM LIGHTRAG_DOC_CHUNKS
-        WHERE {doc_ids} IS NULL OR full_doc_id = ANY(ARRAY[{doc_ids}])
+        WHERE {filter} IS NULL OR full_doc_id = ANY(ARRAY[{doc_ids}])
     )
     SELECT source_id as src_id, target_id as tgt_id
     FROM (
@@ -1812,14 +1814,17 @@ SQL_TEMPLATES = {
         WITH relevant_chunks AS (
             SELECT id as chunk_id
             FROM LIGHTRAG_DOC_CHUNKS
-            WHERE {doc_ids} IS NULL OR full_doc_id = ANY(ARRAY[{doc_ids}])
+            WHERE {filter} IS NULL OR full_doc_id = ANY(ARRAY[{doc_ids}])
         )
         SELECT entity_name FROM
             (
                 SELECT e.id, e.entity_name, 1 - (e.content_vector <=> '[{embedding_string}]'::vector) as distance
                 FROM LIGHTRAG_VDB_ENTITY e
-                JOIN relevant_chunks c ON c.chunk_id = ANY(e.chunk_ids)
                 WHERE e.workspace=$1
+                AND e.id IN (
+                    SELECT graph_id FROM LIGHTRAG_CHUNK_GRAPH_MAP
+                    WHERE chunk_id IN (SELECT chunk_id FROM relevant_chunks)
+                )
             )
         WHERE distance>$2
         ORDER BY distance DESC
@@ -1829,7 +1834,7 @@ SQL_TEMPLATES = {
         WITH relevant_chunks AS (
             SELECT id as chunk_id
             FROM LIGHTRAG_DOC_CHUNKS
-            WHERE {doc_ids} IS NULL OR full_doc_id = ANY(ARRAY[{doc_ids}])
+            WHERE {filter} IS NULL OR full_doc_id = ANY(ARRAY[{doc_ids}])
         )
         SELECT id FROM
             (
