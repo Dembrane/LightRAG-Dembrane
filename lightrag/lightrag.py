@@ -71,7 +71,7 @@ class LightRAG:
     # Directory
     # ---
 
-    working_dir: str = field(
+    working_dir: str | None = field(
         default=f"./lightrag_cache_{datetime.now().strftime('%Y-%m-%d-%H:%M:%S')}"
     )
     """Directory where cache and temporary files are stored."""
@@ -300,9 +300,9 @@ class LightRAG:
 
         initialize_share_data()
 
-        if not os.path.exists(self.working_dir):
-            logger.info(f"Creating working directory {self.working_dir}")
-            os.makedirs(self.working_dir)
+        # if not os.path.exists(self.working_dir):
+        #     logger.info(f"Creating working directory {self.working_dir}")
+        #     os.makedirs(self.working_dir)
 
         # Verify storage implementation compatibility and environment variables
         storage_configs = [
