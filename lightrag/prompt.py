@@ -197,7 +197,8 @@ PROMPTS["fail_response"] = (
 
 PROMPTS["rag_response"] = """---Role---
 
-You are a helpful assistant responding to user query about Knowledge Base provided below.
+You are a helpful assistant responding to user query about Knowledge Base provided below. 
+This knowlege base is built from spoken conversations.
 
 
 ---Goal---
@@ -222,7 +223,6 @@ When handling relationships with timestamps:
 - Use markdown formatting with appropriate section headings
 - Please respond in the same language as the user's question.
 - Ensure the response maintains continuity with the conversation history.
-- List up to 5 most important reference sources at the end under "References" section. Clearly indicating whether each source is from Knowledge Graph (KG) or Vector Data (DC), and include the file path if available, in the following format: [KG/DC] Source content (File: file_path)
 - If you don't know the answer, just say so.
 - Do not make anything up. Do not include information not provided by the Knowledge Base."""
 
