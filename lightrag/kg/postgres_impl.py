@@ -345,6 +345,17 @@ class PGKVStorage(BaseKVStorage):
             )
             raise
 
+
+
+    async def get_related_ids_from_full_doc_ids(self, full_doc_ids: list[str]) -> list[dict[str, Any]]:
+        """Get all chunks associated with a list of full document IDs"""
+        if not is_namespace(self.namespace, NameSpace.KV_STORE_TEXT_CHUNKS):
+            return []
+            
+        sql = SQL_TEMPLATES["get_related_ids_from_full_doc_ids_text_chunks"]
+        params = {"workspace": self.db.workspace, "full_doc_ids": full_doc_ids}
+        return await self.db.query(sql, params, multirows=True)
+
     ################ INSERT METHODS ################
     async def upsert(self, data: dict[str, dict[str, Any]]) -> None:
         logger.info(f"Inserting {len(data)} to {self.namespace}")
@@ -876,6 +887,12 @@ class PGDocStatusStorage(DocStatusStorage):
         """Drop the storage"""
         drop_sql = SQL_TEMPLATES["drop_doc_full"]
         await self.db.execute(drop_sql)
+
+    async def get_related_ids_from_full_doc_ids(self, full_doc_ids: list[str]) -> list[dict[str, Any]]:
+        """Get values by full_doc_ids - Not applicable for DocStatus"""
+        # This method is inherited from BaseKVStorage but not used in DocStatus
+        # Return empty list since DocStatus doesn't use full_doc_ids
+        return []
 
 
 class PGGraphQueryException(Exception):
@@ -1754,22 +1771,18 @@ SQL_TEMPLATES = {
                                 VALUES ($1, $2, $3)
                                 ON CONFLICT ON CONSTRAINT LIGHTRAG_CHUNK_GRAPH_MAP_PK DO NOTHING
                                 """,
-    # SQL for VectorStorage
-    # "entities": """SELECT entity_name FROM
-    #     (SELECT id, entity_name, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
-    #     FROM LIGHTRAG_VDB_ENTITY where workspace=$1)
-    #     WHERE distance>$2 ORDER BY distance DESC  LIMIT $3
-    #    """,
-    # "relationships": """SELECT source_id as src_id, target_id as tgt_id FROM
-    #     (SELECT id, source_id,target_id, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
-    #     FROM LIGHTRAG_VDB_RELATION where workspace=$1)
-    #     WHERE distance>$2 ORDER BY distance DESC  LIMIT $3
-    #    """,
-    # "chunks": """SELECT id FROM
-    #     (SELECT id, 1 - (content_vector <=> '[{embedding_string}]'::vector) as distance
-    #     FROM LIGHTRAG_DOC_CHUNKS where workspace=$1)
-    #     WHERE distance>$2 ORDER BY distance DESC  LIMIT $3
-    #    """,
+    # "get_related_ids_from_full_doc_ids_text_chunks": """WITH relevant_chunks AS (SELECT id as chunk_id, file_path
+    #                             FROM LIGHTRAG_DOC_CHUNKS 
+    #                             WHERE workspace=$1 AND full_doc_id = ANY($2))
+    #                             SELECT m.graph_id, m.chunk_id, r.file_path FROM 
+    #                             LIGHTRAG_CHUNK_GRAPH_MAP m
+    #                             LEFT JOIN relevant_chunks r ON m.chunk_id = r.chunk_id
+    #                             WHERE m.chunk_id IN (SELECT chunk_id FROM relevant_chunks)
+    #                         """,
+    "get_related_ids_from_full_doc_ids_text_chunks": """SELECT id as chunk_id, file_path
+                                FROM LIGHTRAG_DOC_CHUNKS 
+                                WHERE workspace=$1 AND full_doc_id = ANY($2)
+                            """,
     # DROP tables
     "drop_all": """
 	    DROP TABLE IF EXISTS LIGHTRAG_DOC_FULL CASCADE;

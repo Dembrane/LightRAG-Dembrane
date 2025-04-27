@@ -236,7 +236,7 @@ async def _merge_nodes_then_upsert(
         reverse=True,
     )[0][0]
     description = GRAPH_FIELD_SEP.join(
-        sorted(set([dp["description"] for dp in nodes_data] + already_description))
+        sorted(set([dp["description"]+'::'+dp["source_id"] for dp in nodes_data] + already_description))
     )
     source_id = GRAPH_FIELD_SEP.join(
         set([dp["source_id"] for dp in nodes_data] + already_source_ids)
@@ -317,7 +317,7 @@ async def _merge_edges_then_upsert(
     description = GRAPH_FIELD_SEP.join(
         sorted(
             set(
-                [dp["description"] for dp in edges_data if dp.get("description")]
+                [dp["description"] + '::' + dp["source_id"] for dp in edges_data if dp.get("description")]
                 + already_description
             )
         )
@@ -1111,6 +1111,21 @@ async def mix_kg_vector_query(
 
     return response
 
+def _filter_graphitem_by_chunk_id(graph_item_data_dict, query_param):
+    if query_param.ids:
+        valid_source_ids, valid_descriptions, valid_file_paths = [], [], []
+        source_chunk_ids = graph_item_data_dict['source_id'].split(GRAPH_FIELD_SEP)
+        descriptions = graph_item_data_dict['description'].split(GRAPH_FIELD_SEP)
+        file_paths = graph_item_data_dict['file_path'].split(GRAPH_FIELD_SEP)
+        valid_source_ids = [x for x in source_chunk_ids if x in query_param.related_chunk_ids]
+        valid_file_paths = [x for x in file_paths if x in query_param.related_file_paths]
+        valid_descriptions = ['::'.join(x.split('::')[:-1]) for x in descriptions if x.split('::')[-1] in query_param.related_chunk_ids]
+        graph_item_data_dict['source_id'] = GRAPH_FIELD_SEP.join(valid_source_ids)
+        graph_item_data_dict['description'] = GRAPH_FIELD_SEP.join(valid_descriptions)
+        graph_item_data_dict['file_path'] = GRAPH_FIELD_SEP.join(valid_file_paths)
+        return graph_item_data_dict
+    else: 
+        return graph_item_data_dict
 
 async def _build_query_context(
     ll_keywords: str,
@@ -1121,6 +1136,15 @@ async def _build_query_context(
     text_chunks_db: BaseKVStorage,
     query_param: QueryParam,
 ):
+    if query_param.ids:
+        query_param.related_chunk_ids = []
+        query_param.related_file_paths = []
+        related_ids = await text_chunks_db.get_related_ids_from_full_doc_ids(query_param.ids)
+        for related_id_dict in related_ids:
+            # query_param.related_graph_entity_ids = list(set(query_param.related_graph_entity_ids + [g["graph_id"]]))
+            query_param.related_chunk_ids = list(set(query_param.related_chunk_ids + [related_id_dict["chunk_id"]]))
+            query_param.related_file_paths = list(set(query_param.related_file_paths + [related_id_dict["file_path"]]))
+
     logger.info(f"Process {os.getpid()} buidling query context...")
     if query_param.mode == "local":
         entities_context, relations_context, text_units_context = await _get_node_data(
@@ -1229,8 +1253,11 @@ async def _get_node_data(
         {**n, "entity_name": k["entity_name"], "rank": d}
         for k, n, d in zip(results, node_datas, node_degrees)
         if n is not None
-    ]  # what is this text_chunks_db doing.  dont remember it in airvx.  check the diagram.
-    # get entitytext chunk
+    ]  
+    
+    node_datas = [_filter_graphitem_by_chunk_id(n, query_param) for n in node_datas]
+    node_datas = [n for n in node_datas if n is not None]
+
     use_text_units, use_relations = await asyncio.gather(
         _find_most_related_text_unit_from_entities(
             node_datas, query_param, text_chunks_db, knowledge_graph_inst
@@ -1238,7 +1265,7 @@ async def _get_node_data(
         _find_most_related_edges_from_entities(
             node_datas, query_param, knowledge_graph_inst
         ),
-    )
+    ) # These 2 funcs need filtering 
 
     len_node_datas = len(node_datas)
     node_datas = truncate_list_by_token_size(
@@ -1368,8 +1395,9 @@ async def _find_most_related_text_unit_from_entities(
     for index, (this_text_units, this_edges) in enumerate(zip(text_units, edges)):
         for c_id in this_text_units:
             if c_id not in all_text_units_lookup:
-                all_text_units_lookup[c_id] = index
-                tasks.append((c_id, index, this_edges))
+                if c_id in query_param.related_chunk_ids:
+                    all_text_units_lookup[c_id] = index
+                    tasks.append((c_id, index, this_edges))
 
     results = await asyncio.gather(
         *[text_chunks_db.get_by_id(c_id) for c_id, _, _ in tasks]
@@ -1448,6 +1476,8 @@ async def _find_most_related_edges_from_entities(
         for k, v, d in zip(all_edges, all_edges_pack, all_edges_degree)
         if v is not None
     ]
+    all_edges_data = [_filter_graphitem_by_chunk_id(e, query_param) for e in all_edges_data]
+    all_edges_data = [e for e in all_edges_data if e is not None]
     all_edges_data = sorted(
         all_edges_data, key=lambda x: (x["rank"], x["weight"]), reverse=True
     )
@@ -1505,6 +1535,10 @@ async def _get_edge_data(
         for k, v, d in zip(results, edge_datas, edge_degree)
         if v is not None
     ]
+
+    edge_datas = [_filter_graphitem_by_chunk_id(e, query_param) for e in edge_datas]
+    edge_datas = [e for e in edge_datas if e is not None]
+
     edge_datas = sorted(
         edge_datas, key=lambda x: (x["rank"], x["weight"]), reverse=True
     )
@@ -1517,10 +1551,10 @@ async def _get_edge_data(
         _find_most_related_entities_from_relationships(
             edge_datas, query_param, knowledge_graph_inst
         ),
-        _find_related_text_unit_from_relationships(
+        _find_most_related_text_unit_from_relationships(
             edge_datas, query_param, text_chunks_db, knowledge_graph_inst
         ),
-    )
+    ) # These 2 funcs need filtering 
     logger.info(
         f"Global query uses {len(use_entities)} entites, {len(edge_datas)} relations, {len(use_text_units)} chunks"
     )
@@ -1629,6 +1663,9 @@ async def _find_most_related_entities_from_relationships(
         for k, n, d in zip(entity_names, node_datas, node_degrees)
     ]
 
+    node_datas = [_filter_graphitem_by_chunk_id(n, query_param) for n in node_datas]
+    node_datas = [n for n in node_datas if n is not None]
+
     len_node_datas = len(node_datas)
     node_datas = truncate_list_by_token_size(
         node_datas,
@@ -1642,7 +1679,7 @@ async def _find_most_related_entities_from_relationships(
     return node_datas
 
 
-async def _find_related_text_unit_from_relationships(
+async def _find_most_related_text_unit_from_relationships(
     edge_datas: list[dict],
     query_param: QueryParam,
     text_chunks_db: BaseKVStorage,
@@ -1667,7 +1704,8 @@ async def _find_related_text_unit_from_relationships(
     tasks = []
     for index, unit_list in enumerate(text_units):
         for c_id in unit_list:
-            tasks.append(fetch_chunk_data(c_id, index))
+            if c_id in query_param.related_chunk_ids:
+                tasks.append(fetch_chunk_data(c_id, index))
 
     await asyncio.gather(*tasks)
 

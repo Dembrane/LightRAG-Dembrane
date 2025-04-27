@@ -84,6 +84,11 @@ class QueryParam:
     ids: list[str] | None = None
     """List of ids to filter the results."""
 
+    related_chunk_ids: list[str] | None = None
+    """List of chunk ids related to filter ids."""
+
+    related_file_paths: list[str] | None = None
+    """List of file paths related to filter ids."""
 
 @dataclass
 class StorageNameSpace(ABC):
@@ -171,6 +176,10 @@ class BaseKVStorage(StorageNameSpace, ABC):
     @abstractmethod
     async def upsert(self, data: dict[str, dict[str, Any]]) -> None:
         """Upsert data"""
+    
+    @abstractmethod
+    async def get_related_ids_from_full_doc_ids(self, full_doc_ids: list[str]) -> list[dict[str, Any]]:
+        """Get values by full_doc_ids"""
 
 
 @dataclass
