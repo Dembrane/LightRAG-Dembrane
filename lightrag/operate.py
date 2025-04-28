@@ -1123,6 +1123,8 @@ def _filter_graphitem_by_chunk_id(graph_item_data_dict, query_param):
         graph_item_data_dict['source_id'] = GRAPH_FIELD_SEP.join(valid_source_ids)
         graph_item_data_dict['description'] = GRAPH_FIELD_SEP.join(valid_descriptions)
         graph_item_data_dict['file_path'] = GRAPH_FIELD_SEP.join(valid_file_paths)
+        if valid_source_ids == [] or valid_descriptions == [] or valid_file_paths == []:
+            return None
         return graph_item_data_dict
     else: 
         return graph_item_data_dict
