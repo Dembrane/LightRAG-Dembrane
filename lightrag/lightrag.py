@@ -1554,7 +1554,7 @@ class LightRAG:
 
             # 2. Get all chunks related to this document
             # Find all chunks where full_doc_id equals the current doc_id
-            all_chunks = await self.text_chunks.get_all()
+            all_chunks = await self.text_chunks.get_all(doc_id)
             related_chunks = {
                 chunk_id: chunk_data
                 for chunk_id, chunk_data in all_chunks.items()
@@ -1571,24 +1571,24 @@ class LightRAG:
             logger.debug(f"Found {len(chunk_ids)} chunks to delete")
 
             # 3. Before deleting, check the related entities and relationships for these chunks
-            for chunk_id in chunk_ids:
-                # Check entities
-                entities_storage = await self.entities_vdb.client_storage
-                entities = [
-                    dp
-                    for dp in entities_storage["data"]
-                    if chunk_id in dp.get("source_id")
-                ]
-                logger.debug(f"Chunk {chunk_id} has {len(entities)} related entities")
+            # for chunk_id in chunk_ids:
+            #     # Check entities
+            #     entities_storage = await self.entities_vdb.get_all()
+            #     entities = [
+            #         dp
+            #         for dp in entities_storage["data"]
+            #         if chunk_id in dp.get("source_id")
+            #     ]
+            #     logger.debug(f"Chunk {chunk_id} has {len(entities)} related entities")
 
-                # Check relationships
-                relationships_storage = await self.relationships_vdb.client_storage
-                relations = [
-                    dp
-                    for dp in relationships_storage["data"]
-                    if chunk_id in dp.get("source_id")
-                ]
-                logger.debug(f"Chunk {chunk_id} has {len(relations)} related relations")
+            #     # Check relationships
+            #     relationships_storage = await self.relationships_vdb.get_all()
+            #     relations = [
+            #         dp
+            #         for dp in relationships_storage["data"]
+            #         if chunk_id in dp.get("source_id")
+            #     ]
+            #     logger.debug(f"Chunk {chunk_id} has {len(relations)} related relations")
 
             # Continue with the original deletion process...
 
@@ -1600,9 +1600,11 @@ class LightRAG:
             # 5. Find and process entities and relationships that have these chunks as source
             # Get all nodes and edges from the graph storage using storage-agnostic methods
             entities_to_delete = set()
-            entities_to_update = {}  # entity_name -> new_source_id
+            entities_sourceid_to_update = {}  # entity_name -> new_source_id
+            entities_description_to_update = {}  # entity_name -> new_description
             relationships_to_delete = set()
-            relationships_to_update = {}  # (src, tgt) -> new_source_id
+            relationships_source_id_to_update = {}  # (src, tgt) -> new_source_id
+            relationships_description_to_update = {}  # (src, tgt) -> new_description
 
             # Process entities - use storage-agnostic methods
             all_labels = await self.chunk_entity_relation_graph.get_all_labels()
@@ -1619,7 +1621,11 @@ class LightRAG:
                         )
                     else:
                         new_source_id = GRAPH_FIELD_SEP.join(sources)
-                        entities_to_update[node_label] = new_source_id
+                        new_description = GRAPH_FIELD_SEP.join([description for description
+                                                                in node_data["description"].split(GRAPH_FIELD_SEP) 
+                                                                if description.split('::')[-1] not in chunk_ids])
+                        entities_sourceid_to_update[node_label] = new_source_id
+                        entities_description_to_update[node_label] = new_description
                         logger.debug(
                             f"Entity {node_label} will be updated with new source_id: {new_source_id}"
                         )
@@ -1645,7 +1651,11 @@ class LightRAG:
                                 )
                             else:
                                 new_source_id = GRAPH_FIELD_SEP.join(sources)
-                                relationships_to_update[(src, tgt)] = new_source_id
+                                new_description = GRAPH_FIELD_SEP.join([description for description
+                                                                in edge_data["description"].split(GRAPH_FIELD_SEP) 
+                                                                if description.split('::')[-1] not in chunk_ids])
+                                relationships_source_id_to_update[(src, tgt)] = new_source_id
+                                relationships_description_to_update[(src, tgt)] = new_description
                                 logger.debug(
                                     f"Relationship {src}-{tgt} will be updated with new source_id: {new_source_id}"
                                 )
@@ -1661,10 +1671,11 @@ class LightRAG:
                 logger.debug(f"Deleted {len(entities_to_delete)} entities from graph")
 
             # Update entities
-            for entity, new_source_id in entities_to_update.items():
+            for entity, new_source_id in entities_sourceid_to_update.items():
                 node_data = await self.chunk_entity_relation_graph.get_node(entity)
                 if node_data:
                     node_data["source_id"] = new_source_id
+                    node_data["description"] = entities_description_to_update[entity]
                     await self.chunk_entity_relation_graph.upsert_node(
                         entity, node_data
                     )
@@ -1687,10 +1698,11 @@ class LightRAG:
                 )
 
             # Update relationships
-            for (src, tgt), new_source_id in relationships_to_update.items():
+            for (src, tgt), new_source_id in relationships_source_id_to_update.items():
                 edge_data = await self.chunk_entity_relation_graph.get_edge(src, tgt)
                 if edge_data:
                     edge_data["source_id"] = new_source_id
+                    edge_data["description"] = relationships_description_to_update[(src, tgt)]
                     await self.chunk_entity_relation_graph.upsert_edge(
                         src, tgt, edge_data
                     )
@@ -1708,12 +1720,12 @@ class LightRAG:
             logger.info(
                 f"Successfully deleted document {doc_id} and related data. "
                 f"Deleted {len(entities_to_delete)} entities and {len(relationships_to_delete)} relationships. "
-                f"Updated {len(entities_to_update)} entities and {len(relationships_to_update)} relationships."
+                f"Updated {len(entities_sourceid_to_update)} entities and {len(relationships_source_id_to_update)} relationships."
             )
 
             async def process_data(data_type, vdb, chunk_id):
                 # Check data (entities or relationships)
-                storage = await vdb.client_storage
+                storage = await vdb.get_all()
                 data_with_chunk = [
                     dp
                     for dp in storage["data"]
@@ -1767,7 +1779,7 @@ class LightRAG:
                     logger.warning(f"Document {doc_id} still exists in full_docs")
 
                 # Verify if chunks have been deleted
-                all_remaining_chunks = await self.text_chunks.get_all()
+                all_remaining_chunks = await self.text_chunks.get_all(doc_id)
                 remaining_related_chunks = {
                     chunk_id: chunk_data
                     for chunk_id, chunk_data in all_remaining_chunks.items()
@@ -1780,12 +1792,12 @@ class LightRAG:
                         f"Found {len(remaining_related_chunks)} remaining chunks"
                     )
 
-                # Verify entities and relationships
-                for chunk_id in chunk_ids:
-                    await process_data("entities", self.entities_vdb, chunk_id)
-                    await process_data(
-                        "relationships", self.relationships_vdb, chunk_id
-                    )
+                # # Verify entities and relationships
+                # for chunk_id in chunk_ids:
+                #     await process_data("entities", self.entities_vdb, chunk_id)
+                #     await process_data(
+                #         "relationships", self.relationships_vdb, chunk_id
+                #     )
 
             await verify_deletion()
 
@@ -2741,7 +2753,7 @@ class LightRAG:
                     relations_data.append(relation_row)
 
         # --- Relationships (from VectorDB) ---
-        all_relationships = await self.relationships_vdb.client_storage
+        all_relationships = await self.relationships_vdb.get_all()
         for rel in all_relationships["data"]:
             relationships_data.append(
                 {

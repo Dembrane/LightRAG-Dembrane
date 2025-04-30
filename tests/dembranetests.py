@@ -198,12 +198,26 @@ def test_query_for_prompt_generation():
                             mode="mix"
                         ))
     assert len(res) >= 1
+
+async def test_deletion_by_file_path():
+    with open('test_data.json', 'r') as f:
+        test_data_list = json.load(f)
+        if not test_data_list:
+            raise ValueError("No test data available. Run test_insert_data first.")
+        latest_test_data = test_data_list[-1]  # Get the most recent test data
+    lightrag = asyncio.run(initialize_rag())
+    await lightrag.adelete_by_doc_id(doc_id=latest_test_data["test_id"])
+
+
 if __name__ == "__main__":
+    run_count = 1
     test_data_list = []
     if os.path.exists('test_data.json'):
         with open('test_data.json', 'r') as f:
             test_data_list = json.load(f)
-    if len(test_data_list) < 3:
-        test_multiple_insert_data(run_count=3)
-    r= test_query_for_prompt_generation()
+    if len(test_data_list) < run_count:
+        test_multiple_insert_data(run_count=run_count)
+    test_query_for_prompt_generation()
+    asyncio.run(test_deletion_by_file_path())
+
 

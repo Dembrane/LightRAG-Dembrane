@@ -258,6 +258,29 @@ class PGKVStorage(BaseKVStorage):
         self.base_namespace = self.namespace.replace(namespace_prefix, "")
         self._max_batch_size = self.global_config["embedding_batch_num"]
 
+    async def get_all(self, full_doc_id: str) -> dict[str, Any]:
+        """
+        Fetch all key-value pairs from the storage.
+        Returns:
+            dict[str, Any]: All records as a dictionary keyed by id.
+        """
+        table_name = namespace_to_table_name(self.namespace)
+        if not table_name:
+            logger.error(f"Unknown namespace for get_all: {self.namespace}")
+            return {}
+
+        sql = f"SELECT * FROM {table_name} WHERE workspace=$1 and full_doc_id=$2"
+        params = {"workspace": self.db.workspace, "full_doc_id": full_doc_id}
+        try:
+            rows = await self.db.query(sql, params, multirows=True)
+            if not rows:
+                return {}
+            # Use 'id' as the key for all returned rows
+            return {row["id"]: row for row in rows}
+        except Exception as e:
+            logger.error(f"Error in get_all for {self.namespace}: {e}")
+            return {}
+
     async def initialize(self):
         if self.db is None:
             self.db = await ClientManager.get_client()
@@ -346,7 +369,6 @@ class PGKVStorage(BaseKVStorage):
             raise
 
 
-
     async def get_related_ids_from_full_doc_ids(self, full_doc_ids: list[str]) -> list[dict[str, Any]]:
         """Get all chunks associated with a list of full document IDs"""
         if not is_namespace(self.namespace, NameSpace.KV_STORE_TEXT_CHUNKS):
@@ -396,7 +418,31 @@ class PGKVStorage(BaseKVStorage):
         drop_sql = SQL_TEMPLATES["drop_all"]
         await self.db.execute(drop_sql)
 
+    async def delete(self, ids: list[str]) -> None:
+        """Delete rows with specified IDs from the storage.
 
+        Args:
+            ids: List of vector IDs to be deleted
+        """
+        if not ids:
+            return
+
+        table_name = namespace_to_table_name(self.namespace)
+        if not table_name:
+            logger.error(f"Unknown namespace for vector deletion: {self.namespace}")
+            return
+        
+        ids_list = ",".join([f"'{id}'" for id in ids])
+        delete_sql = (
+            f"DELETE FROM {table_name} WHERE workspace=$1 AND id IN ({ids_list})"
+        )
+
+        try:
+            await self.db.execute(delete_sql, {"workspace": self.db.workspace})
+        except Exception as e:
+            logger.error(f"Error in delete for {self.namespace}: {e}")
+            raise
+    
 @final
 @dataclass
 class PGVectorStorage(BaseVectorStorage):
@@ -726,7 +772,26 @@ class PGVectorStorage(BaseVectorStorage):
         except Exception as e:
             logger.error(f"Error retrieving vector data for IDs {ids}: {e}")
             return []
+    
+    async def get_all(self) -> list[dict[str, Any]]:
+        """
+        Fetch all records from the vector storage.
+        Returns:
+            list[dict[str, Any]]: All records as a list of dictionaries.
+        """
+        table_name = namespace_to_table_name(self.namespace)
+        if not table_name:
+            logger.error(f"Unknown namespace for get_all: {self.namespace}")
+            return []
 
+        sql = f"SELECT * FROM {table_name} WHERE workspace=$1"
+        params = {"workspace": self.db.workspace}
+        try:
+            rows = await self.db.query(sql, params, multirows=True)
+            return [dict(row) for row in rows] if rows else []
+        except Exception as e:
+            logger.error(f"Error in get_all for {self.namespace}: {e}")
+            return []
 
 @final
 @dataclass
@@ -894,6 +959,16 @@ class PGDocStatusStorage(DocStatusStorage):
         # Return empty list since DocStatus doesn't use full_doc_ids
         return []
 
+    async def delete(self, ids: list[str]) -> None:
+        """Delete documents by their IDs"""
+        if not ids:
+            return
+            
+        table_name = namespace_to_table_name(self.namespace)
+        ids_list = ", ".join([f"'{id}'" for id in ids])
+        sql = f"DELETE FROM {table_name} WHERE workspace=$1 AND id IN ({ids_list})"
+        params = {"workspace": self.db.workspace}
+        await self.db.execute(sql, params)
 
 class PGGraphQueryException(Exception):
     """Exception for the AGE queries."""
